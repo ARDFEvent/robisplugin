@@ -7,17 +7,18 @@ import api
 import plugin
 import robiswin, robiswebconfig
 
+import qtawesome as qta
 
 class ROBisPlugin(plugin.Plugin):
     name = "ROBis"
     author = "JJ"
-    version = "1.0.0"
+    version = "1.1.0"
 
     def __init__(self, mw):
         super().__init__(mw)
         self.robis_win = robiswin.ROBisWindow(self.mw, self)
         self.robis_login_win = robiswebconfig.ROBisLoginWindow(self.mw)
-        self.register_mw_tab(self.robis_win)
+        self.register_mw_tab(self.robis_win, qta.icon("mdi6.web"))
         self.register_ww_menu("Přihlášení do ROBisu")
 
     def on_startup(self):

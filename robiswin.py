@@ -1,8 +1,9 @@
 import json
+import os
 from datetime import datetime, timedelta
 
 import requests
-from PySide6.QtCore import QByteArray, QUrl, Slot, QThread
+from PySide6.QtCore import QByteArray, QUrl, Slot, QThread, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -25,19 +26,69 @@ from models import Category, Runner, Control
 from robiswebconfig import ROBisWebConfigWindow
 
 
+ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
+
 class ROBisOChecklistThread(QThread):
-    def __init__(self, parent, apikey) -> None:
+    def __init__(self, parent) -> None:
         super().__init__(parent)
-        self.apikey = apikey
+        self.parent = parent
+        self.apikey = parent.api_edit.text()
 
     def run(self) -> None:
         while True:
-            ocheckdata = requests.get("https://rob-is.cz/api/ochecklist/", headers={"Key": self.apikey})
+            ocheckdata = requests.get(f"{ROBIS_URL}/api/ochecklist/", headers={"Key": self.apikey})
+            if ocheckdata.status_code == 200:
+                ocheckjson = ocheckdata.json()
+                with Session(self.parent.mw.db) as sess:
+                    for runner in ocheckjson:
+                        try:
+                            id = int(runner["competitor_index"])
+                        except:
+                            self.parent.message.emit(
+                                f"OChecklist (záv. {runner["competitor_name"]}) není ID číslo. Používáte IOF XML z ARDFEventu (nikoli z ROBisu)?"
+                            )
+                            continue
+                        print(runner["competitor_name"], id)
+                        dbrunner = sess.scalars(Select(Runner).where(Runner.id == id)).one_or_none()
+                        if not dbrunner:
+                            self.parent.message.emit(
+                                f"OChecklist (záv. {runner["competitor_name"]}) nebyl nalezen závodník s ID {id}."
+                            )
+                            continue
+
+                        if dbrunner.ocheck_processed:
+                            continue
+
+                        if runner["competitor_status"] == "DNS":
+                            dbrunner.manual_dns = True
+                            dbrunner.ocheck_processed = True
+                            self.parent.message.emit(
+                                f"OChecklist (záv. {runner["competitor_name"]}) nevystartoval"
+                            )
+                        if runner["competitor_new_si_number"]:
+                            dbrunner.si = runner["competitor_new_si_number"]
+                            dbrunner.ocheck_processed = True
+                            self.parent.message.emit(
+                                f"OChecklist (záv. {runner["competitor_name"]}) má jiný pič: {runner["competitor_new_si_number"]}"
+                            )
+                        if runner["competitor_status"] == "LATE":
+                            dbrunner.ocheck_processed = True
+                            self.parent.message.emit(
+                                f"OChecklist (záv. {runner["competitor_name"]}) vystartoval pozdě"
+                            )
+                    sess.commit()
+
+            else:
+                self.parent.message.emit(
+                    f"Chyba stahování z OChecklist ({ocheckdata.status_code})"
+                )
             self.sleep(60)
-            ...
+
 
 
 class ROBisWindow(QWidget):
+    message = Signal(str)
+
     def __init__(self, mw, plugin):
         super().__init__()
 
@@ -82,6 +133,11 @@ class ROBisWindow(QWidget):
         )
         lay.addRow(self.update_btn)
 
+        self.ocheck_btn = QPushButton("Stahovat OChecklist")
+        self.ocheck_btn.setCheckable(True)
+        self.ocheck_btn.clicked.connect(self._toggle_ocheck)
+        lay.addRow(self.ocheck_btn)
+
         self.upload_btn = QPushButton("Nahrát výsledky")
         self.upload_btn.clicked.connect(self._upload_res)
         lay.addRow(self.upload_btn)
@@ -90,9 +146,12 @@ class ROBisWindow(QWidget):
 
         self.log = QTextBrowser()
         lay.addWidget(self.log)
+        self.message.connect(self.log.append)
 
         self.nmmanager = QNetworkAccessManager(self)
         self.nmmanager.finished.connect(self.handle_online_res_reply)
+
+        self.proc = None
 
     def _on_ok(self):
         api.set_basic_info(
@@ -106,9 +165,26 @@ class ROBisWindow(QWidget):
         basic_info = api.get_basic_info(self.mw.db)
         self.api_edit.setText(basic_info["robis_api"])
 
+    def _toggle_ocheck(self):
+        if self.proc:
+            self.proc.terminate()
+            self.proc.wait()
+            self.proc = None
+        else:
+            self.proc = ROBisOChecklistThread(self)
+            self.proc.started.connect(self._proc_running)
+            self.proc.finished.connect(self._proc_stopped)
+            self.proc.start()
+
+    def _proc_running(self):
+        self.ocheck_btn.setChecked(True)
+
+    def _proc_stopped(self, msg=None):
+        self.ocheck_btn.setChecked(False)
+
     def _upload_stlcontrols(self):
         response_stl = requests.post(
-            "https://rob-is.cz/api/startlist/?valid=True",
+            f"{ROBIS_URL}/api/startlist/?valid=True",
             stl_json.export(self.mw.db),
             headers={
                 "Race-Api-Key": self.api_edit.text(),
@@ -141,7 +217,7 @@ class ROBisWindow(QWidget):
                     aliases.append({"alias_si_code": cont.code, "alias_name": cont.name})
 
         response_controls = requests.put(
-            "https://rob-is.cz/api/race/",
+            f"{ROBIS_URL}/api/race/",
             json={"categories": cats, "aliases": aliases},
             headers={
                 "Race-Api-Key": self.api_edit.text(),
@@ -153,9 +229,17 @@ class ROBisWindow(QWidget):
             f"{datetime.now().strftime("%H:%M:%S")} - Kontroly: {response_controls.status_code} {response_controls.text}"
         )
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        try:
+            self.proc.terminate()
+            self.proc.wait()
+        except:
+            ...
+        super().closeEvent(event)
+
     def _upload_res(self):
         response = requests.post(
-            "https://rob-is.cz/api/results/?valid=True",
+            f"{ROBIS_URL}/api/results/?valid=True",
             res_json.export(self.mw.db),
             headers={
                 "Race-Api-Key": self.api_edit.text(),
@@ -170,11 +254,11 @@ class ROBisWindow(QWidget):
     def _download(self):
         self.log.append(f"{datetime.now().strftime("%H:%M:%S")} - Začínám importovat...")
         response_event = requests.get(
-            f"https://rob-is.cz/api/?type=json&name=event",
+            f"{ROBIS_URL}/api/?type=json&name=event",
             headers={"Race-Api-Key": self.api_edit.text()},
         )
         response_race = requests.get(
-            f"https://rob-is.cz/api/?type=json&name=race",
+            f"{ROBIS_URL}/api/?type=json&name=race",
             headers={"Race-Api-Key": self.api_edit.text()},
         )
         if response_race.status_code != 200 or response_event.status_code != 200:
@@ -249,7 +333,6 @@ class ROBisWindow(QWidget):
         if not api.get_basic_info(db)["robis_api"]:
             return
 
-        categories = []
         if not all:
             runner = sess.scalars(Select(Runner).where(Runner.si == si)).one_or_none()
             if not runner:
@@ -259,8 +342,9 @@ class ROBisWindow(QWidget):
             runner = None
             categories = sess.scalars(Select(Category)).all()
 
+        data = []
+        
         for category in categories:
-            data = []
             results_cat = results.calculate_category(db, category.name)
 
             for result in results_cat:
@@ -308,10 +392,14 @@ class ROBisWindow(QWidget):
 
             sess.close()
 
+            print(data)
+            if not data:
+                return
+
             json_data = json.dumps(data)
             byte_data = QByteArray(json_data.encode("utf-8"))
 
-            request = QNetworkRequest(QUrl("https://rob-is.cz/api/results/?name=json"))
+            request = QNetworkRequest(QUrl(f"{ROBIS_URL}/api/results/?name=json"))
 
             request.setHeader(
                 QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json"
