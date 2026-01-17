@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 import requests
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import QVBoxLayout, QWidget, QLabel, QPushButton
 
 import api
 
+ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
 
 class ROBisLoginWindow(QWidget):
     def __init__(self, mw):
@@ -22,7 +24,7 @@ class ROBisLoginWindow(QWidget):
         self.setLayout(lay)
 
         self.webview = QWebEngineView()
-        self.webview.setUrl("https://rob-is.cz/login")
+        self.webview.setUrl(f"{ROBIS_URL}/login")
         cookiestore = self.webview.page().profile().cookieStore()
         cookiestore.cookieAdded.connect(lambda x: self.cookie_process(x))
 
@@ -77,10 +79,10 @@ class ROBisWebConfigWindow(QWidget):
             qcookie.setHttpOnly(True)
             qcookie.setSecure(True)
             qcookie.setSameSitePolicy(QNetworkCookie.SameSite.Strict)
-            cookiestore.setCookie(qcookie, QUrl("https://rob-is.cz"))
+            cookiestore.setCookie(qcookie, QUrl(ROBIS_URL))
             cookiestore.loadAllCookies()
             self.webview.loadFinished.connect(self.set_local_storage)
-            self.webview.setUrl("https://rob-is.cz/")
+            self.webview.setUrl(ROBIS_URL + "/")
             self.url_change()
             super().show()
 
@@ -92,6 +94,7 @@ class ROBisWebConfigWindow(QWidget):
         self.webview.urlChanged.connect(self.url_change)
 
     def ok(self):
+        print(self.apikeys)
         api.set_basic_info(self.mw.db, {"robis_api": self.apikeys[self.current_race]})
         self.robiswin._show()
         self.robiswin._download()
@@ -100,14 +103,13 @@ class ROBisWebConfigWindow(QWidget):
     def url_change(self):
         self.downloadbtn.setEnabled(False)
         self.current_race = -1
-        if match := re.fullmatch(r"https://rob-is.cz/soutez/(\d*)/?\?race=(\d*).*", self.webview.url().toString()):
+        print(self.webview.url().toString())
+        if match := re.fullmatch(rf"{ROBIS_URL}/soutez/(\d*)/?\?race=(\d*).*", self.webview.url().toString()):
             if match.group(1) != self.last_id:
-                resp = requests.get(f"https://rob-is.cz/api/event/edit/?id={match.group(1)}",
+                resp = requests.get(f"{ROBIS_URL}/api/event/edit/?id={match.group(1)}",
                                     cookies={"authToken": api.get_config_value("robis-cookie"),
-                                             "cookieConsent": "true"},
-                                    headers={"Accept": "application/json",
-                                             "Referer": f"https://rob-is.cz/soutez/{match.group(1)}/nastaveni",
-                                             "Host": "rob-is.cz"})
+                                             "cookieConsent": "true"})
+                print(resp.status_code, resp.content)
                 if resp.status_code != 200:
                     self.statuslbl.setText("Tuto soutěž nelze importovat (nejste správce).")
                     self.statuslbl.setStyleSheet("color: white; background-color: red; padding: .5em;")
@@ -121,20 +123,21 @@ class ROBisWebConfigWindow(QWidget):
                 self.last_id = match.group(1)
             self.webview.page().runJavaScript(
                 'for (const elem of document.getElementsByTagName("a")) { if (elem.getAttribute("href").endsWith("nastaveni")) {elem.remove();} }')
-            if int(match.group(2)) in self.races:
-                if self.apikeys[match.group(2)] is None:
+            if int(match.group(2)) in self.races or len(self.races) == 1:
+                key = self.apikeys[match.group(2)] if len(self.races) > 1 else list(self.apikeys.values())[0]
+                if key is None:
                     self.statuslbl.setText(f"Tato etapa je zamklá (nemá dostupný API klíč).")
                     self.statuslbl.setStyleSheet("color: black; background-color: red; padding: .5em;")
                     return
                 self.statuslbl.setText(f"Tuto etapu (závod) je možno importovat.")
                 self.statuslbl.setStyleSheet("color: black; background-color: green; padding: .5em;")
-                self.current_race = match.group(2)
+                self.current_race = match.group(2) if int(match.group(2)) in self.races else str(int(list(self.apikeys.keys())[0]))
                 self.downloadbtn.setEnabled(True)
             else:
                 self.statuslbl.setText("Tuto soutěž lze importovat, vyberte etapu.")
                 self.statuslbl.setStyleSheet("color: black; background-color: yellow; padding: .5em;")
-        elif match := re.fullmatch(r"https://rob-is.cz/.*", self.webview.url().toString()):
+        elif match := re.fullmatch(rf"{ROBIS_URL}/.*", self.webview.url().toString()):
             self.statuslbl.setText("Vyberte soutěž.")
             self.statuslbl.setStyleSheet("color: white; background-color: blue; padding: .5em;")
         else:
-            self.webview.setUrl("https://rob-is.cz/")
+            self.webview.setUrl(ROBIS_URL + "/")
