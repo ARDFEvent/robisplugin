@@ -229,7 +229,7 @@ class ROBisWindow(QWidget):
             f"{datetime.now().strftime("%H:%M:%S")} - Kontroly: {response_controls.status_code} {response_controls.text}"
         )
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event) -> None:
         try:
             self.proc.terminate()
             self.proc.wait()
