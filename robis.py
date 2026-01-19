@@ -12,7 +12,7 @@ import qtawesome as qta
 class ROBisPlugin(plugin.Plugin):
     name = "ROBis"
     author = "JJ"
-    version = "1.1.1"
+    version = "1.2.0"
 
     def __init__(self, mw):
         super().__init__(mw)

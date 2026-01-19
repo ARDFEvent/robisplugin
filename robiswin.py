@@ -2,7 +2,9 @@ import json
 import os
 from datetime import datetime, timedelta
 
+import api
 import requests
+import results
 from PySide6.QtCore import QByteArray, QUrl, Slot, QThread, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -15,18 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from dateutil.parser import parser
-from sqlalchemy import Delete, Select
-from sqlalchemy.orm import Session
-
-import api
-import results
 from exports import json_results as res_json
 from exports import json_startlist as stl_json
 from models import Category, Runner, Control
 from robiswebconfig import ROBisWebConfigWindow
-
+from sqlalchemy import Delete, Select
+from sqlalchemy.orm import Session
 
 ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
+
 
 class ROBisOChecklistThread(QThread):
     def __init__(self, parent) -> None:
@@ -48,7 +47,6 @@ class ROBisOChecklistThread(QThread):
                                 f"OChecklist (záv. {runner["competitor_name"]}) není ID číslo. Používáte IOF XML z ARDFEventu (nikoli z ROBisu)?"
                             )
                             continue
-                        print(runner["competitor_name"], id)
                         dbrunner = sess.scalars(Select(Runner).where(Runner.id == id)).one_or_none()
                         if not dbrunner:
                             self.parent.message.emit(
@@ -85,7 +83,6 @@ class ROBisOChecklistThread(QThread):
             self.sleep(60)
 
 
-
 class ROBisWindow(QWidget):
     message = Signal(str)
 
@@ -100,12 +97,8 @@ class ROBisWindow(QWidget):
 
         self.webconfigwin = ROBisWebConfigWindow(self.mw, self)
 
-        cookie = api.get_config_value("robis-cookie")
-
-        self.webbtn = QPushButton(
-            f"Nastavení automaticky{" - přihlaste se na úvodní stránce (Nástroje > Přihlášení do ROBisu)" if not cookie else ""}")
+        self.webbtn = QPushButton()
         self.webbtn.clicked.connect(self.webconfigwin.show)
-        self.webbtn.setEnabled(cookie is not None)
         lay.addRow(self.webbtn)
 
         self.api_edit = QLineEdit()
@@ -163,6 +156,12 @@ class ROBisWindow(QWidget):
 
     def _show(self):
         basic_info = api.get_basic_info(self.mw.db)
+
+        cookie = api.get_config_value("robis-cookie")
+        self.webbtn.setText(
+            f"Nastavení automaticky{" - přihlaste se na úvodní stránce (Nástroje > Přihlášení do ROBisu)" if not cookie else ""}")
+        self.webbtn.setEnabled(cookie is not None)
+
         self.api_edit.setText(basic_info["robis_api"])
 
     def _toggle_ocheck(self):
@@ -272,14 +271,23 @@ class ROBisWindow(QWidget):
         race = response_race.json()
         event = response_event.json()
 
+        if not (race.get("race_start") and race.get("race_time_limit") and race.get("race_band")):
+            QMessageBox.warning(
+                self,
+                "Chyba",
+                f"Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.",
+            )
+            self.log.append(f"{datetime.now().strftime("%H:%M:%S")} - Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.")
+            return
+
         api.set_basic_info(
             self.mw.db,
             {
                 "name": f"{event["event_name"]} - {race["race_name"]}",
-                "date_tzero": parser().parse(race["race_start"]).isoformat(),
+                "date_tzero": parser().parse(race.get("race_start", "2026-01-01T00:00:00+00:00")).isoformat(),
                 "organizer": event["event_organiser"],
-                "limit": race["race_time_limit"],
-                "band": api.BANDS[["M2", "M80", "COMBINED"].index(race["race_band"])],
+                "limit": race.get("race_time_limit"),
+                "band": api.BANDS[["M2", "M80", "COMBINED"].index(race.get("race_band", "M2"))],
             },
         )
 
@@ -343,7 +351,7 @@ class ROBisWindow(QWidget):
             categories = sess.scalars(Select(Category)).all()
 
         data = []
-        
+
         for category in categories:
             results_cat = results.calculate_category(db, category.name)
 
