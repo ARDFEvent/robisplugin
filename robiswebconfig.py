@@ -6,7 +6,7 @@ import api
 import requests
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import QFormLayout, QVBoxLayout, QWidget, QLabel, QPushButton, QLineEdit, QTreeWidget, \
-    QTreeWidgetItem, QProgressBar, QTreeWidgetItemIterator
+    QTreeWidgetItem, QProgressBar, QTreeWidgetItemIterator, QMessageBox
 
 ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
 
@@ -40,20 +40,18 @@ class ROBisLoginWindow(QWidget):
         lay.addRow(self.error_lbl)
 
     def login(self):
-        login = requests.get(f"{ROBIS_URL}/api/login/",
-                             params={"email": self.email_input.text(), "password": self.password_input.text()})
+        login = requests.post(f"{ROBIS_URL}/api/login/",
+                             json={"email": self.email_input.text(), "password": self.password_input.text()})
         if login.status_code != 200:
-            self.error_lbl.setText("Chyba přihlášení, zkontrolujte email a heslo.")
+            self.error_lbl.setText(f"Chyba přihlášení: {login.json().get('error', str(login.status_code))}")
             return
         token = login.cookies.get("authToken")
         if not token:
             self.error_lbl.setText("Chyba přihlášení, zkontrolujte email a heslo.")
             return
         api.set_config_value("robis-cookie", token)
-        ls = login.json()
-        api.set_config_value("robis-ls", json.dumps(
-            {"userID": ls["userId"], "firstName": ls["first_name"], "last_name": ls["last_name"],
-             "rolesByIndex": json.dumps(ls["roles"])}))
+        QMessageBox.information(self, "Přihlášení úspěšné", "Byli jste úspěšně přihlášeni do ROBisu.")
+        self.close()
 
 
 class EventLoadThread(QThread):
@@ -166,7 +164,7 @@ class ROBisWebConfigWindow(QWidget):
             item.addChild(QTreeWidgetItem(["", "Nejste správce!"]))
         else:
             for race in data:
-                child = QTreeWidgetItem([race["date"].strftime("%d. %m. %Y"), race["name"]])
+                child = QTreeWidgetItem([race["date"].strftime("%d. %m."), race["name"]])
                 child.setData(0, Qt.UserRole + 1, race["apikey"])
                 item.addChild(child)
 
