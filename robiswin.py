@@ -2,9 +2,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-import api
 import requests
-import results
 from PySide6.QtCore import QByteArray, QUrl, Slot, QThread, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -17,12 +15,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from dateutil.parser import parser
+from sqlalchemy import Delete, Select
+from sqlalchemy.orm import Session
+
+import api
+import results
 from exports import json_results as res_json
 from exports import json_startlist as stl_json
 from models import Category, Runner, Control
 from robiswebconfig import ROBisWebConfigWindow
-from sqlalchemy import Delete, Select
-from sqlalchemy.orm import Session
 
 ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
 
@@ -131,7 +132,7 @@ class ROBisWindow(QWidget):
         self.ocheck_btn.clicked.connect(self._toggle_ocheck)
         lay.addRow(self.ocheck_btn)
 
-        self.upload_btn = QPushButton("Nahrát výsledky")
+        self.upload_btn = QPushButton("Nahrát finální výsledky")
         self.upload_btn.clicked.connect(self._upload_res)
         lay.addRow(self.upload_btn)
 
@@ -159,7 +160,7 @@ class ROBisWindow(QWidget):
 
         cookie = api.get_config_value("robis-cookie")
         self.webbtn.setText(
-            f"Nastavení automaticky{" - přihlaste se na úvodní stránce (Nástroje > Přihlášení do ROBisu)" if not cookie else ""}")
+            f"Vybrat závod ze seznamu{" - přihlaste se (Pluginy > Přihlášení do ROBisu)" if not cookie else ""}")
         self.webbtn.setEnabled(cookie is not None)
 
         self.api_edit.setText(basic_info["robis_api"])
@@ -277,7 +278,8 @@ class ROBisWindow(QWidget):
                 "Chyba",
                 f"Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.",
             )
-            self.log.append(f"{datetime.now().strftime("%H:%M:%S")} - Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.")
+            self.log.append(
+                f"{datetime.now().strftime("%H:%M:%S")} - Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.")
             return
 
         api.set_basic_info(

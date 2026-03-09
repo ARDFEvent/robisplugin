@@ -1,18 +1,19 @@
 import time
 
 import jwt
+import qtawesome as qta
 from PySide6.QtWidgets import QMessageBox
 
 import api
 import plugin
-import robiswin, robiswebconfig
+import robiswebconfig
+import robiswin
 
-import qtawesome as qta
 
 class ROBisPlugin(plugin.Plugin):
     name = "ROBis"
     author = "JJ"
-    version = "1.2.0"
+    version = "1.3.0"
 
     def __init__(self, mw):
         super().__init__(mw)

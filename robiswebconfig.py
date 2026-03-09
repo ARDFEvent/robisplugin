@@ -1,12 +1,12 @@
-import json
 import os
 from datetime import datetime
 
-import api
 import requests
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import QFormLayout, QVBoxLayout, QWidget, QLabel, QPushButton, QLineEdit, QTreeWidget, \
     QTreeWidgetItem, QProgressBar, QTreeWidgetItemIterator, QMessageBox
+
+import api
 
 ROBIS_URL = os.getenv("ARDF_ROBIS_URL", "https://rob-is.cz")
 
@@ -41,7 +41,7 @@ class ROBisLoginWindow(QWidget):
 
     def login(self):
         login = requests.post(f"{ROBIS_URL}/api/login/",
-                             json={"email": self.email_input.text(), "password": self.password_input.text()})
+                              json={"email": self.email_input.text(), "password": self.password_input.text()})
         if login.status_code != 200:
             self.error_lbl.setText(f"Chyba přihlášení: {login.json().get('error', str(login.status_code))}")
             return
@@ -62,7 +62,8 @@ class EventLoadThread(QThread):
 
         authToken = api.get_config_value("robis-cookie")
 
-        events = requests.get(f"{ROBIS_URL}/api/event/?year={datetime.now().year}&period=all", cookies={"authToken": authToken})
+        events = requests.get(f"{ROBIS_URL}/api/event/?year={datetime.now().year}&period=all",
+                              cookies={"authToken": authToken})
 
         mx = len(events.json())
 
@@ -71,8 +72,8 @@ class EventLoadThread(QThread):
                 continue
 
             result.append({"name": event["event_name"],
-                            "date": datetime.strptime(event["event_date_start"], "%Y-%m-%d"),
-                            "id": event["id"]})
+                           "date": datetime.strptime(event["event_date_start"], "%Y-%m-%d"),
+                           "id": event["id"]})
         result.sort(key=lambda x: x["date"])
         self.data.emit(result)
 
@@ -109,13 +110,16 @@ class ROBisWebConfigWindow(QWidget):
         self.apikeys = {}
         self.last_id = -1
         self.current_race = -1
+        self.thr = None
+        self.rthr = None
 
         self.setWindowTitle("Stažení z ROBisu")
 
         lay = QVBoxLayout()
         self.setLayout(lay)
 
-        lay.addWidget(QLabel("Načítají se pouze letošní neuzavřené závody.\nEtapy načtete kliknutím na závod. Etapu otevřete dvojklikem."))
+        lay.addWidget(QLabel(
+            "Načítají se pouze letošní neuzavřené závody.\nEtapy načtete kliknutím na závod. Etapu otevřete dvojklikem."))
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
@@ -129,6 +133,10 @@ class ROBisWebConfigWindow(QWidget):
         super().show()
 
         self.tree.clear()
+
+        if self.thr and self.thr.isRunning():
+            self.thr.terminate()
+            self.thr.wait()
 
         self.thr = EventLoadThread()
         self.thr.data.connect(self.data_load)
@@ -153,6 +161,10 @@ class ROBisWebConfigWindow(QWidget):
         eid = item.data(0, Qt.UserRole)
         if not eid:
             return
+        
+        if self.rthr and self.rthr.isRunning():
+            self.rthr.terminate()
+            self.rthr.wait()
 
         self.rthr = RaceLoadThread(item)
         self.rthr.data.connect(self.race_load)
