@@ -13,7 +13,7 @@ import robiswin
 class ROBisPlugin(plugin.Plugin):
     name = "ROBis"
     author = "JJ"
-    version = "1.3.0"
+    version = "1.3.1"
 
     def __init__(self, mw):
         super().__init__(mw)

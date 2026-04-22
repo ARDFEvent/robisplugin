@@ -261,73 +261,89 @@ class ROBisWindow(QWidget):
             f"{ROBIS_URL}/api/?type=json&name=race",
             headers={"Race-Api-Key": self.api_edit.text()},
         )
-        if response_race.status_code != 200 or response_event.status_code != 200:
+
+        event_name = ""
+
+        if response_event.status_code != 200:
+            print(response_event.text)
             QMessageBox.critical(
                 self,
                 "Chyba",
-                f"Stahování se nezdařilo: {response_race.status_code} {response_race.text}",
+                f"Stahování dat o SOUTĚŽI se nezdařilo: {response_event.status_code}",
             )
-            return
+        else:
+            event = response_event.json()
+            event_name = event["event_name"]
+            api.set_basic_info(
+                self.mw.db,
+                {
+                    "organizer": event["event_organiser"],
+                },
+            )
 
-        race = response_race.json()
-        event = response_event.json()
-
-        if not (race.get("race_start") and race.get("race_time_limit") and race.get("race_band")):
-            QMessageBox.warning(
+        if response_race.status_code != 200:
+            print(response_race.text)
+            QMessageBox.critical(
                 self,
                 "Chyba",
-                f"Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.",
+                f"Stahování dat o ZÁVODĚ se nezdařilo: {response_event.status_code}",
             )
-            self.log.append(
-                f"{datetime.now().strftime("%H:%M:%S")} - Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Import zrušen.")
-            return
+        else:
+            race = response_race.json()
 
-        api.set_basic_info(
-            self.mw.db,
-            {
-                "name": f"{event["event_name"]} - {race["race_name"]}",
-                "date_tzero": parser().parse(race.get("race_start", "2026-01-01T00:00:00+00:00")).isoformat(),
-                "organizer": event["event_organiser"],
-                "limit": race.get("race_time_limit"),
-                "band": api.BANDS[["M2", "M80", "COMBINED"].index(race.get("race_band", "M2"))],
-            },
-        )
-
-        sess = Session(self.mw.db)
-        sess.execute(Delete(Runner))
-
-        for cat in race["categories"]:
-            if not len(
-                    sess.scalars(
-                        Select(Category).where(Category.name == cat["category_name"])
-                    ).all()
-            ):
-                sess.add(
-                    Category(
-                        name=cat["category_name"], controls=[], display_controls=""
-                    )
+            if not (race.get("race_start") and race.get("race_time_limit") and race.get("race_band")):
+                QMessageBox.warning(
+                    self,
+                    "Chyba",
+                    f"Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Nezapomeňte je nastavit.",
                 )
                 self.log.append(
-                    f"{datetime.now().strftime('%H:%M:%S')} - Přidávám kategorii {cat['category_name']}"
+                    f"{datetime.now().strftime("%H:%M:%S")} - Některé povinné údaje chybí (čas startu, organizátor, časový limit, pásmo). Nezapomeňte je nastavit.")
+            else:
+                api.set_basic_info(
+                    self.mw.db,
+                    {
+                        "name": f"{event_name} - {race["race_name"]}",
+                        "date_tzero": parser().parse(race.get("race_start", "2026-01-01T00:00:00+00:00")).isoformat(),
+                        "limit": race.get("race_time_limit"),
+                        "band": api.BANDS[["M2", "M80", "COMBINED"].index(race.get("race_band", "M2"))],
+                    },
                 )
 
-        for runner in race["competitors"]:
-            sess.add(
-                Runner(
-                    name=runner["last_name"] + ", " + runner["first_name"],
-                    club=runner["competitor_club"],
-                    si=runner["si_number"] or 0,
-                    reg=runner["competitor_index"],
-                    category=sess.scalars(
-                        Select(Category).where(
-                            Category.name == runner["competitor_category"]
+            with Session(self.mw.db) as sess:
+                sess.execute(Delete(Runner))
+
+                for cat in race["categories"]:
+                    if not len(
+                            sess.scalars(
+                                Select(Category).where(Category.name == cat["category_name"])
+                            ).all()
+                    ):
+                        sess.add(
+                            Category(
+                                name=cat["category_name"], controls=[], display_controls=""
+                            )
                         )
-                    ).first(),
-                    call="",
-                )
-            )
-        sess.commit()
-        sess.close()
+                        self.log.append(
+                            f"{datetime.now().strftime('%H:%M:%S')} - Přidávám kategorii {cat['category_name']}"
+                        )
+
+                for runner in race["competitors"]:
+                    sess.add(
+                        Runner(
+                            name=runner["last_name"] + ", " + runner["first_name"],
+                            club=runner["competitor_club"],
+                            si=runner["si_number"] or 0,
+                            reg=runner["competitor_index"],
+                            category=sess.scalars(
+                                Select(Category).where(
+                                    Category.name == runner["competitor_category"]
+                                )
+                            ).first(),
+                            call="",
+                        )
+                    )
+                sess.commit()
 
         self.log.append(f"{datetime.now().strftime("%H:%M:%S")} - Import OK")
 
